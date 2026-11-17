@@ -74,6 +74,10 @@ flowchart LR
 | Week 5 | **Waivers & PR checks** — Add auditable waivers with expiration, add pull request check | Planned |
 | Week 6 | **Release** — Enforce size and depth limits and benchmark parsing, package with Docker, add end-to-end tests and architecture docs | Planned |
 
+## Documentation
+
+- [Initial rule scope](docs/rule-scope.md) — supported inputs, verdicts, direction and the first compatibility rules
+
 ## Getting started
 
 Setup instructions will be added once the CLI is in place.
