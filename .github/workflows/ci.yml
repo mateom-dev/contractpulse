@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Lint, typecheck and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # No lockfile is committed yet, so resolve from package.json ranges.
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+      - name: Validate sample contracts with the CLI
+        run: node packages/cli/dist/index.js validate fixtures/contracts/*.json
+
+      - name: Reject malformed contracts
+        run: |
+          set +e
+          node packages/cli/dist/index.js validate fixtures/invalid/*.json
+          status=$?
+          set -e
+          if [ "$status" -ne 1 ]; then
+            echo "expected exit code 1 for malformed contracts, got $status"
+            exit 1
+          fi

@@ -1,0 +1,4 @@
+{
+  "name": "orders.created",
+  "fields": ["orderId", "customerId"]
+}
