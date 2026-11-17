@@ -2,7 +2,7 @@
 
 **API and event schema compatibility checks.** ContractPulse compares versions of an API or event contract, finds which registered consumers could break, and produces a CI report showing the exact rule behind each finding.
 
-> **Status:** early development, following a 12-week roadmap (see below). It works on local contract files and synthetic consumers.
+> **Status:** early development, following a 6-week roadmap (see below). It works on local contract files and synthetic consumers.
 
 ## The problem
 
@@ -65,14 +65,14 @@ flowchart LR
 
 ## Roadmap
 
-| Weeks | Focus |
-|---|---|
-| 1–2 | CLI, CI and sample contracts; bounded parsing, canonicalization and hashing |
-| 3–4 | Type-change, field-removal and requiredness rules; readable diffs and CLI output |
-| 5–6 | Registry for services and contract versions; consumer dependencies and impact |
-| 7–8 | Version and impact UI, report exports; auditable waivers with expiry |
-| 9–10 | Pull request checks; more golden test cases and unsupported-form docs |
-| 11–12 | Size limits, benchmarks, packaging, end-to-end tests and docs |
+| Week | Focus | Status |
+|---|---|---|
+| Week 1 | **W01-01 + CI** — Scaffold TypeScript workspace with CLI package, read contract files and reject malformed input | Planned |
+| Week 2 | **Engine** — Add bounded parsing, canonicalize and hash contracts, detect type changes, detect field removals, detect requiredness changes | Planned |
+| Week 3 | **Diffs & registry** — Print readable directional diffs, add JSON output and exit codes, add workspace registry for services and versions | Planned |
+| Week 4 | **Impact** — Track consumer dependencies, compute change impact, add version and impact views, export review reports | Planned |
+| Week 5 | **Waivers & PR checks** — Add auditable waivers with expiration, add pull request check | Planned |
+| Week 6 | **Release** — Enforce size and depth limits and benchmark parsing, package with Docker, add end-to-end tests and architecture docs | Planned |
 
 ## Getting started
 
