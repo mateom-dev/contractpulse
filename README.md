@@ -68,7 +68,7 @@ flowchart LR
 | Week | Focus | Status |
 |---|---|---|
 | Week 1 | **W01-01 + CI** — Scaffold TypeScript workspace with CLI package, read contract files and reject malformed input | ✅ Done |
-| Week 2 | **Engine** — Add bounded parsing, canonicalize and hash contracts, detect type changes, detect field removals, detect requiredness changes | Planned |
+| Week 2 | **Engine** — Add bounded parsing, canonicalize and hash contracts, detect type changes, detect field removals, detect requiredness changes | ✅ Done |
 | Week 3 | **Diffs & registry** — Print readable directional diffs, add JSON output and exit codes, add workspace registry for services and versions | Planned |
 | Week 4 | **Impact** — Track consumer dependencies, compute change impact, add version and impact views, export review reports | Planned |
 | Week 5 | **Waivers & PR checks** — Add auditable waivers with expiration, add pull request check | Planned |

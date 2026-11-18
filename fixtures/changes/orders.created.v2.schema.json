@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.example.test/events/orders.created/v2",
+  "title": "orders.created",
+  "version": "2.0.0",
+  "type": "object",
+  "required": ["eventId", "occurredAt", "orderId", "totalCents", "currency"],
+  "additionalProperties": false,
+  "properties": {
+    "eventId": { "type": "string", "format": "uuid" },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "orderId": { "type": "number" },
+    "totalCents": { "type": "integer", "minimum": 0 },
+    "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+    "channel": { "type": "string", "enum": ["web", "mobile", "store", "marketplace"] }
+  }
+}

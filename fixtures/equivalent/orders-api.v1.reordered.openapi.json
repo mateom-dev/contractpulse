@@ -1,0 +1,77 @@
+{
+    "components": {
+        "schemas": {
+            "Order": {
+                "properties": {
+                    "note": {
+                        "type": "string"
+                    },
+                    "currency": {
+                        "pattern": "^[A-Z]{3}$",
+                        "type": "string"
+                    },
+                    "totalCents": {
+                        "minimum": 0,
+                        "type": "integer"
+                    },
+                    "status": {
+                        "enum": [
+                            "pending",
+                            "paid",
+                            "shipped",
+                            "cancelled"
+                        ],
+                        "type": "string"
+                    },
+                    "orderId": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "orderId",
+                    "status",
+                    "totalCents",
+                    "currency"
+                ],
+                "type": "object"
+            }
+        }
+    },
+    "paths": {
+        "/orders/{orderId}": {
+            "get": {
+                "responses": {
+                    "404": {
+                        "description": "Order not found"
+                    },
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/Order"
+                                }
+                            }
+                        },
+                        "description": "The order"
+                    }
+                },
+                "parameters": [
+                    {
+                        "schema": {
+                            "type": "string"
+                        },
+                        "required": true,
+                        "in": "path",
+                        "name": "orderId"
+                    }
+                ],
+                "operationId": "getOrder"
+            }
+        }
+    },
+    "info": {
+        "version": "1.0.0",
+        "title": "Orders API"
+    },
+    "openapi": "3.1.0"
+}

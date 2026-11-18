@@ -1,4 +1,13 @@
 import { readFile, stat } from "node:fs/promises";
+import {
+  DEFAULT_LIMITS,
+  LimitExceededError,
+  checkDocumentBounds,
+  checkTextDepth,
+  type ParseLimits,
+} from "./engine/bounds.js";
+import { contractHash } from "./engine/canonical.js";
+import { collectReferences, type ContractReference } from "./engine/refs.js";
 
 export type ContractKind = "openapi" | "json-schema";
 
@@ -10,6 +19,10 @@ export interface LoadedContract {
   /** `info.version` for OpenAPI, `version` / `x-version` for JSON Schema when present. */
   readonly contractVersion: string | undefined;
   readonly document: Record<string, unknown>;
+  /** Every `$ref` in the document. Remote ones are listed, never fetched. */
+  readonly references: readonly ContractReference[];
+  /** `sha256:<hex>` of the canonical form; equal for equivalent documents. */
+  readonly hash: string;
 }
 
 export type ContractErrorCode =
@@ -19,7 +32,9 @@ export type ContractErrorCode =
   | "NOT_AN_OBJECT"
   | "UNKNOWN_FORMAT"
   | "UNSUPPORTED_VERSION"
-  | "MISSING_FIELD";
+  | "MISSING_FIELD"
+  | "LIMIT_EXCEEDED"
+  | "BROKEN_REF";
 
 export class ContractError extends Error {
   constructor(
@@ -45,12 +60,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Classify an already-parsed document. Throws ContractError when it is not a supported contract. */
-export function parseContract(path: string, text: string): LoadedContract {
+/**
+ * Parse and classify contract text within `limits`. Throws ContractError when the
+ * text is not a supported contract, exceeds a limit, or has a dangling local `$ref`.
+ */
+export function parseContract(path: string, text: string, limits: ParseLimits = DEFAULT_LIMITS): LoadedContract {
   let document: unknown;
   try {
+    checkTextDepth(text, limits.maxDepth);
     document = JSON.parse(text);
+    checkDocumentBounds(document, limits);
   } catch (error) {
+    if (error instanceof LimitExceededError) {
+      throw new ContractError("LIMIT_EXCEEDED", path, error.message);
+    }
     const reason = error instanceof Error ? error.message : String(error);
     throw new ContractError("INVALID_JSON", path, `not valid JSON (${reason})`);
   }
@@ -75,7 +98,15 @@ export function parseContract(path: string, text: string): LoadedContract {
     if (!isRecord(document["paths"])) {
       throw new ContractError("MISSING_FIELD", path, "OpenAPI document needs a paths object");
     }
-    return { path, kind: "openapi", specVersion, contractVersion: info["version"], document };
+    return {
+      path,
+      kind: "openapi",
+      specVersion,
+      contractVersion: info["version"],
+      document,
+      references: checkedReferences(path, document, limits),
+      hash: contractHash(document),
+    };
   }
 
   if ("$schema" in document) {
@@ -97,6 +128,8 @@ export function parseContract(path: string, text: string): LoadedContract {
       specVersion: dialect,
       contractVersion: typeof declared === "string" ? declared : undefined,
       document,
+      references: checkedReferences(path, document, limits),
+      hash: contractHash(document),
     };
   }
 
@@ -107,8 +140,25 @@ export function parseContract(path: string, text: string): LoadedContract {
   );
 }
 
+function checkedReferences(
+  path: string,
+  document: Record<string, unknown>,
+  limits: ParseLimits,
+): ContractReference[] {
+  const references = collectReferences(document, limits.maxRefHops);
+  const broken = references.find((reference) => reference.status === "missing");
+  if (broken !== undefined) {
+    throw new ContractError(
+      "BROKEN_REF",
+      path,
+      `$ref ${JSON.stringify(broken.ref)} at ${broken.at || "/"} points to nothing in this document`,
+    );
+  }
+  return references;
+}
+
 /** Read a local contract file. Never fetches anything over the network. */
-export async function loadContract(path: string): Promise<LoadedContract> {
+export async function loadContract(path: string, limits: ParseLimits = DEFAULT_LIMITS): Promise<LoadedContract> {
   let size: number;
   try {
     size = (await stat(path)).size;
@@ -118,5 +168,5 @@ export async function loadContract(path: string): Promise<LoadedContract> {
   if (size > MAX_CONTRACT_BYTES) {
     throw new ContractError("TOO_LARGE", path, `file is ${size} bytes (limit ${MAX_CONTRACT_BYTES})`);
   }
-  return parseContract(path, await readFile(path, "utf8"));
+  return parseContract(path, await readFile(path, "utf8"), limits);
 }

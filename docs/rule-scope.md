@@ -10,7 +10,10 @@ This document fixes which contract changes ContractPulse will classify in its fi
 | JSON Schema | draft-07, 2019-09, 2020-12 (JSON only) | `packages/cli/src/contract.ts` |
 
 - Files are read from disk only. Remote `$ref`s are never fetched; a remote reference is an UNKNOWN finding, not an error.
-- Files over 1 MiB are rejected before parsing (`TOO_LARGE`). Depth limits come with bounded parsing in Week 2.
+- Files over 1 MiB are rejected before parsing (`TOO_LARGE`).
+- Bounded parsing (`packages/cli/src/engine/bounds.ts`) rejects a contract with `LIMIT_EXCEEDED` when it nests deeper than 64 levels (checked on the raw text before `JSON.parse`), holds more than 100,000 values, or has a string or key longer than 64 KiB.
+- Local `$ref`s (`#/...`) are resolved with at most 32 hops (`packages/cli/src/engine/refs.ts`). A local `$ref` whose target does not exist is an error (`BROKEN_REF`); cycles, over-long chains and remote refs are kept as references and reported as UNKNOWN by the rules.
+- Every loaded contract gets a content hash (`sha256:<hex>`, `packages/cli/src/engine/canonical.ts`) of its canonical form: object keys sorted, `required` and `type` arrays and `enum` values treated as sets, no whitespace. Other arrays keep their order, examples, defaults and `x-` extensions are only key-sorted, and descriptions count. Equivalent files therefore hash the same (see `fixtures/equivalent/`), and an unchanged hash means there is nothing to diff.
 - YAML, Swagger 2.0, AsyncAPI and Protobuf are out of scope for now.
 
 ## Verdicts
@@ -55,6 +58,22 @@ Field paths use JSON Pointer (e.g. `/properties/orderId`).
 
 Each finding carries: rule ID, verdict, direction, JSON Pointer in the old and new document, and the old and new value.
 
+### How the engine applies the rules
+
+`compareContracts` (`packages/cli/src/rules/compare.ts`) returns no findings when the two content hashes match. Otherwise it pairs schemas that exist in both versions and walks them (`packages/cli/src/rules/walk.ts`):
+
+- JSON Schema: the root schema, as `response`.
+- OpenAPI: for each operation present in both versions, parameter schemas matched by `in` + `name` (operation-level overrides path-level) and the `application/json` request body as `request`; each `application/json` response with the same status code as `response`.
+- From each pair the walker descends into properties present in both versions, `items` and schema-valued `additionalProperties`, following local `$ref`s. A pair already visited in the same direction is skipped, so recursive schemas terminate. Findings come out in a stable order (sorted paths, statuses, parameter keys and property names).
+
+Type rules (`packages/cli/src/rules/type-change.ts`) compare type sets: the `type` keyword (string or array), plus `null` when the OpenAPI 3.0 `nullable: true` is set; `integer` counts as a subset of `number`, and a schema without `type` accepts every type. Equivalent sets such as `["number", "integer"]` and `"number"` produce no finding.
+
+`field.removed` (`packages/cli/src/rules/field-removal.ts`) reports each name under the old `properties` that is missing from the new schema, one finding per property in name order, with the old property schema as the old value. It is BREAKING in the response direction. In the request direction it is SAFE when the new schema still accepts unknown properties (`additionalProperties` absent, `true` or `{}`), BREAKING when the new schema sets `additionalProperties: false`, and UNKNOWN when `additionalProperties` is a schema, because the values clients keep sending are now checked against it. When either version's type set excludes `object`, removals are left to the type rules.
+
+Requiredness rules (`packages/cli/src/rules/requiredness.ts`) compare each object schema's `properties` and `required` keywords, with `required` read as a set. A name in the new `properties` that was neither in the old `properties` nor in the old `required` is an added field: `field.added.required` when the new schema requires it, otherwise `field.added.optional` (its message notes a closed old schema, `additionalProperties: false`). Every other name whose membership in `required` changed is `required.added` or `required.removed`, with `false`/`true` as the old and new values; a required property that is removed outright gets both `field.removed` and `required.removed`. Findings point at the property, or at the schema's `required` keyword for names that have no property definition. Requiredness of OpenAPI parameters (`required: true` on the parameter object) and added or removed parameters are not checked yet.
+
+Anything in the UNKNOWN list below that differs between the versions is reported as rule `schema.unsupported` with verdict UNKNOWN. For composition keywords the walker does not descend further, and an unchanged composite that contains a `$ref` is still UNKNOWN, because the referenced schema may have changed.
+
 ## Reported as UNKNOWN for now
 
 - `oneOf`, `anyOf`, `allOf`, `not`, `if` / `then` / `else`, `discriminator`
@@ -67,7 +86,7 @@ These move into the rule table only with golden tests that cover the SAFE, BREAK
 
 ## Worked example
 
-The demo change to the `orders.created` fixture (`fixtures/contracts/orders.created.v1.schema.json`):
+The demo change from `fixtures/contracts/orders.created.v1.schema.json` to `fixtures/changes/orders.created.v2.schema.json`:
 
 | Change | Rule | Verdict |
 |---|---|---|
