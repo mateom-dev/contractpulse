@@ -58,6 +58,18 @@ Field paths use JSON Pointer (e.g. `/properties/orderId`).
 
 Each finding carries: rule ID, verdict, direction, JSON Pointer in the old and new document, and the old and new value.
 
+### How the engine applies the rules
+
+`compareContracts` (`packages/cli/src/rules/compare.ts`) returns no findings when the two content hashes match. Otherwise it pairs schemas that exist in both versions and walks them (`packages/cli/src/rules/walk.ts`):
+
+- JSON Schema: the root schema, as `response`.
+- OpenAPI: for each operation present in both versions, parameter schemas matched by `in` + `name` (operation-level overrides path-level) and the `application/json` request body as `request`; each `application/json` response with the same status code as `response`.
+- From each pair the walker descends into properties present in both versions, `items` and schema-valued `additionalProperties`, following local `$ref`s. A pair already visited in the same direction is skipped, so recursive schemas terminate. Findings come out in a stable order (sorted paths, statuses, parameter keys and property names).
+
+Type rules (`packages/cli/src/rules/type-change.ts`) compare type sets: the `type` keyword (string or array), plus `null` when the OpenAPI 3.0 `nullable: true` is set; `integer` counts as a subset of `number`, and a schema without `type` accepts every type. Equivalent sets such as `["number", "integer"]` and `"number"` produce no finding.
+
+Anything in the UNKNOWN list below that differs between the versions is reported as rule `schema.unsupported` with verdict UNKNOWN. For composition keywords the walker does not descend further, and an unchanged composite that contains a `$ref` is still UNKNOWN, because the referenced schema may have changed.
+
 ## Reported as UNKNOWN for now
 
 - `oneOf`, `anyOf`, `allOf`, `not`, `if` / `then` / `else`, `discriminator`
@@ -70,7 +82,7 @@ These move into the rule table only with golden tests that cover the SAFE, BREAK
 
 ## Worked example
 
-The demo change to the `orders.created` fixture (`fixtures/contracts/orders.created.v1.schema.json`):
+The demo change from `fixtures/contracts/orders.created.v1.schema.json` to `fixtures/changes/orders.created.v2.schema.json`:
 
 | Change | Rule | Verdict |
 |---|---|---|
