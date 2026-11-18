@@ -192,6 +192,7 @@ describe("compareContracts", () => {
     const findings = compareContracts(before, after);
     expect(summary(findings)).toEqual([
       { rule: "field.removed", verdict: "BREAKING", direction: "response", oldPointer: "/properties/customerId" },
+      { rule: "required.removed", verdict: "BREAKING", direction: "response", oldPointer: "/properties/customerId" },
       { rule: "schema.unsupported", verdict: "UNKNOWN", direction: "response", oldPointer: "/properties/channel/enum" },
       { rule: "type.changed", verdict: "BREAKING", direction: "response", oldPointer: "/properties/orderId" },
     ]);

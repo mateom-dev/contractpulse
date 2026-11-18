@@ -17,6 +17,10 @@ export type RuleId =
   | "type.widened"
   | "type.narrowed"
   | "field.removed"
+  | "field.added.optional"
+  | "field.added.required"
+  | "required.added"
+  | "required.removed"
   /** A construct the engine cannot decide yet changed; CI defers to a reviewer. */
   | "schema.unsupported";
 

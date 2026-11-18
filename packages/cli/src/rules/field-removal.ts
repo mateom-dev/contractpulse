@@ -18,7 +18,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** True when the schema may describe an object (no `type`, or a type set containing `object`). */
-function allowsObject(schema: Record<string, unknown>): boolean {
+export function allowsObject(schema: Record<string, unknown>): boolean {
   const types = effectiveTypes(schema);
   return types === undefined || types.has("object");
 }
