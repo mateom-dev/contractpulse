@@ -191,6 +191,7 @@ describe("compareContracts", () => {
     const after = await loadContract(fixture("changes/orders.created.v2.schema.json"));
     const findings = compareContracts(before, after);
     expect(summary(findings)).toEqual([
+      { rule: "field.removed", verdict: "BREAKING", direction: "response", oldPointer: "/properties/customerId" },
       { rule: "schema.unsupported", verdict: "UNKNOWN", direction: "response", oldPointer: "/properties/channel/enum" },
       { rule: "type.changed", verdict: "BREAKING", direction: "response", oldPointer: "/properties/orderId" },
     ]);

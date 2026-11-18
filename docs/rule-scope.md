@@ -68,6 +68,8 @@ Each finding carries: rule ID, verdict, direction, JSON Pointer in the old and n
 
 Type rules (`packages/cli/src/rules/type-change.ts`) compare type sets: the `type` keyword (string or array), plus `null` when the OpenAPI 3.0 `nullable: true` is set; `integer` counts as a subset of `number`, and a schema without `type` accepts every type. Equivalent sets such as `["number", "integer"]` and `"number"` produce no finding.
 
+`field.removed` (`packages/cli/src/rules/field-removal.ts`) reports each name under the old `properties` that is missing from the new schema, one finding per property in name order, with the old property schema as the old value. It is BREAKING in the response direction. In the request direction it is SAFE when the new schema still accepts unknown properties (`additionalProperties` absent, `true` or `{}`), BREAKING when the new schema sets `additionalProperties: false`, and UNKNOWN when `additionalProperties` is a schema, because the values clients keep sending are now checked against it. When either version's type set excludes `object`, removals are left to the type rules.
+
 Anything in the UNKNOWN list below that differs between the versions is reported as rule `schema.unsupported` with verdict UNKNOWN. For composition keywords the walker does not descend further, and an unchanged composite that contains a `$ref` is still UNKNOWN, because the referenced schema may have changed.
 
 ## Reported as UNKNOWN for now

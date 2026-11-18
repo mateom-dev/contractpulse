@@ -8,11 +8,12 @@
  */
 import type { LoadedContract } from "../contract.js";
 import { getAtPointer } from "../engine/refs.js";
+import { fieldRemovalRule } from "./field-removal.js";
 import type { Finding } from "./finding.js";
 import { typeChangeRule } from "./type-change.js";
 import { child, resolveAt, walkSchemas, type SchemaRoot, type SchemaRule } from "./walk.js";
 
-export const DEFAULT_RULES: readonly SchemaRule[] = [typeChangeRule];
+export const DEFAULT_RULES: readonly SchemaRule[] = [typeChangeRule, fieldRemovalRule];
 
 const HTTP_METHODS = ["get", "put", "post", "delete", "options", "head", "patch", "trace"] as const;
 const JSON_MEDIA_TYPE = "application/json";

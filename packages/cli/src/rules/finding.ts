@@ -16,6 +16,7 @@ export type RuleId =
   | "type.changed"
   | "type.widened"
   | "type.narrowed"
+  | "field.removed"
   /** A construct the engine cannot decide yet changed; CI defers to a reviewer. */
   | "schema.unsupported";
 
