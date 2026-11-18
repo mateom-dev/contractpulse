@@ -10,7 +10,9 @@ This document fixes which contract changes ContractPulse will classify in its fi
 | JSON Schema | draft-07, 2019-09, 2020-12 (JSON only) | `packages/cli/src/contract.ts` |
 
 - Files are read from disk only. Remote `$ref`s are never fetched; a remote reference is an UNKNOWN finding, not an error.
-- Files over 1 MiB are rejected before parsing (`TOO_LARGE`). Depth limits come with bounded parsing in Week 2.
+- Files over 1 MiB are rejected before parsing (`TOO_LARGE`).
+- Bounded parsing (`packages/cli/src/engine/bounds.ts`) rejects a contract with `LIMIT_EXCEEDED` when it nests deeper than 64 levels (checked on the raw text before `JSON.parse`), holds more than 100,000 values, or has a string or key longer than 64 KiB.
+- Local `$ref`s (`#/...`) are resolved with at most 32 hops (`packages/cli/src/engine/refs.ts`). A local `$ref` whose target does not exist is an error (`BROKEN_REF`); cycles, over-long chains and remote refs are kept as references and reported as UNKNOWN by the rules.
 - YAML, Swagger 2.0, AsyncAPI and Protobuf are out of scope for now.
 
 ## Verdicts

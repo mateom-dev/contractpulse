@@ -30,6 +30,11 @@ async function validate(files: readonly string[], out: Output): Promise<number> 
       const contract = await loadContract(file);
       const version = contract.contractVersion ?? "unversioned";
       out.stdout(`ok    ${file} (${contract.kind} ${contract.specVersion}, version ${version})\n`);
+      for (const reference of contract.references) {
+        if (reference.status !== "local") {
+          out.stdout(`      note: $ref ${reference.ref} at ${reference.at || "/"} is ${reference.status} (not resolved)\n`);
+        }
+      }
     } catch (error) {
       if (!(error instanceof ContractError)) throw error;
       failed += 1;
