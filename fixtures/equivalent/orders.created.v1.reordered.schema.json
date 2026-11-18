@@ -1,0 +1,18 @@
+{
+  "properties": {
+    "channel": { "enum": ["store", "web", "mobile"], "type": "string" },
+    "currency": { "pattern": "^[A-Z]{3}$", "type": "string" },
+    "totalCents": { "minimum": 0, "type": "integer" },
+    "customerId": { "type": "string" },
+    "orderId": { "type": "string" },
+    "occurredAt": { "format": "date-time", "type": "string" },
+    "eventId": { "format": "uuid", "type": "string" }
+  },
+  "additionalProperties": false,
+  "required": ["orderId", "eventId", "currency", "occurredAt", "totalCents", "customerId", "orderId"],
+  "type": "object",
+  "version": "1.0.0",
+  "title": "orders.created",
+  "$id": "https://contracts.example.test/events/orders.created/v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

@@ -6,6 +6,7 @@ import {
   checkTextDepth,
   type ParseLimits,
 } from "./engine/bounds.js";
+import { contractHash } from "./engine/canonical.js";
 import { collectReferences, type ContractReference } from "./engine/refs.js";
 
 export type ContractKind = "openapi" | "json-schema";
@@ -20,6 +21,8 @@ export interface LoadedContract {
   readonly document: Record<string, unknown>;
   /** Every `$ref` in the document. Remote ones are listed, never fetched. */
   readonly references: readonly ContractReference[];
+  /** `sha256:<hex>` of the canonical form; equal for equivalent documents. */
+  readonly hash: string;
 }
 
 export type ContractErrorCode =
@@ -102,6 +105,7 @@ export function parseContract(path: string, text: string, limits: ParseLimits = 
       contractVersion: info["version"],
       document,
       references: checkedReferences(path, document, limits),
+      hash: contractHash(document),
     };
   }
 
@@ -125,6 +129,7 @@ export function parseContract(path: string, text: string, limits: ParseLimits = 
       contractVersion: typeof declared === "string" ? declared : undefined,
       document,
       references: checkedReferences(path, document, limits),
+      hash: contractHash(document),
     };
   }
 

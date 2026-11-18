@@ -13,6 +13,7 @@ This document fixes which contract changes ContractPulse will classify in its fi
 - Files over 1 MiB are rejected before parsing (`TOO_LARGE`).
 - Bounded parsing (`packages/cli/src/engine/bounds.ts`) rejects a contract with `LIMIT_EXCEEDED` when it nests deeper than 64 levels (checked on the raw text before `JSON.parse`), holds more than 100,000 values, or has a string or key longer than 64 KiB.
 - Local `$ref`s (`#/...`) are resolved with at most 32 hops (`packages/cli/src/engine/refs.ts`). A local `$ref` whose target does not exist is an error (`BROKEN_REF`); cycles, over-long chains and remote refs are kept as references and reported as UNKNOWN by the rules.
+- Every loaded contract gets a content hash (`sha256:<hex>`, `packages/cli/src/engine/canonical.ts`) of its canonical form: object keys sorted, `required` and `type` arrays and `enum` values treated as sets, no whitespace. Other arrays keep their order, examples, defaults and `x-` extensions are only key-sorted, and descriptions count. Equivalent files therefore hash the same (see `fixtures/equivalent/`), and an unchanged hash means there is nothing to diff.
 - YAML, Swagger 2.0, AsyncAPI and Protobuf are out of scope for now.
 
 ## Verdicts
