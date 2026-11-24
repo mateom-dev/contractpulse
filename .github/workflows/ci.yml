@@ -55,3 +55,58 @@ jobs:
             echo "expected exit code 1 for malformed contracts, got $status"
             exit 1
           fi
+
+  registry-database:
+    name: Registry migrations on PostgreSQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: contractpulse
+          POSTGRES_PASSWORD: contractpulse
+          POSTGRES_DB: contractpulse
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U contractpulse -d contractpulse"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://contractpulse:contractpulse@localhost:5432/contractpulse
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Apply migrations
+        run: pnpm --filter @contractpulse/api db:migrate
+
+      - name: Check the Prisma schema matches the migrations
+        run: >-
+          pnpm --filter @contractpulse/api exec prisma migrate diff
+          --from-migrations prisma/migrations
+          --to-schema-datamodel prisma/schema.prisma
+          --shadow-database-url postgresql://contractpulse:contractpulse@localhost:5432/postgres
+          --exit-code
+
+      - name: Seed the demo workspace twice
+        env:
+          CONTRACTPULSE_DEMO_TOKEN: cp_ci_demo_token_not_secret_0001
+        run: |
+          pnpm --filter @contractpulse/api db:seed
+          pnpm --filter @contractpulse/api db:seed
+
+      - name: Run the store tests against PostgreSQL
+        env:
+          CONTRACTPULSE_TEST_DATABASE_URL: postgresql://contractpulse:contractpulse@localhost:5432/contractpulse
+        run: pnpm --filter @contractpulse/api exec prisma generate && pnpm --filter @contractpulse/api test

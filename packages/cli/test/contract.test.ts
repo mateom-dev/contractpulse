@@ -107,7 +107,7 @@ describe("contractpulse validate", () => {
 
   it("exits 2 for unknown commands", async () => {
     const io = capture();
-    expect(await run(["diff"], io)).toBe(2);
-    expect(io.err).toContain("Unknown command: diff");
+    expect(await run(["publish"], io)).toBe(2);
+    expect(io.err).toContain("Unknown command: publish");
   });
 });

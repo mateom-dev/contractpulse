@@ -69,7 +69,7 @@ flowchart LR
 |---|---|---|
 | Week 1 | **W01-01 + CI** — Scaffold TypeScript workspace with CLI package, read contract files and reject malformed input | ✅ Done |
 | Week 2 | **Engine** — Add bounded parsing, canonicalize and hash contracts, detect type changes, detect field removals, detect requiredness changes | ✅ Done |
-| Week 3 | **Diffs & registry** — Print readable directional diffs, add JSON output and exit codes, add workspace registry for services and versions | Planned |
+| Week 3 | **Diffs & registry** — Print readable directional diffs, add JSON output and exit codes, add workspace registry for services and versions | ✅ Done |
 | Week 4 | **Impact** — Track consumer dependencies, compute change impact, add version and impact views, export review reports | Planned |
 | Week 5 | **Waivers & PR checks** — Add auditable waivers with expiration, add pull request check | Planned |
 | Week 6 | **Release** — Enforce size and depth limits and benchmark parsing, package with Docker, add end-to-end tests and architecture docs | Planned |
@@ -77,7 +77,40 @@ flowchart LR
 ## Documentation
 
 - [Initial rule scope](docs/rule-scope.md) — supported inputs, verdicts, direction and the first compatibility rules
+- [Registry API](packages/api/README.md) — workspaces, services and contract version history
 
 ## Getting started
 
-Setup instructions will be added once the CLI is in place.
+Requires Node.js 20+ and pnpm 9.
+
+```sh
+pnpm install
+pnpm build
+
+# Check that files are supported contracts
+node packages/cli/dist/index.js validate fixtures/contracts/*.json
+
+# Compare two versions of the demo event
+node packages/cli/dist/index.js diff \
+  fixtures/contracts/orders.created.v1.schema.json \
+  fixtures/changes/orders.created.v2.schema.json
+```
+
+`diff` prints one block per finding, BREAKING first: the rule, why it matters, the direction (who reads the data), the JSON Pointer and the old (`-`) and new (`+`) value, then the overall verdict.
+
+For CI jobs and scripts, `--format json` prints the same findings as a versioned JSON report (`schemaVersion`, `verdict`, `summary`, both contracts' hashes, and each finding's rule, direction, OpenAPI location, pointers and values). `--fail-on` sets which verdict fails the run:
+
+```sh
+node packages/cli/dist/index.js diff --format json --fail-on unknown old.json new.json
+```
+
+| Exit code | `diff` | `validate` |
+| --- | --- | --- |
+| 0 | No finding at or above `--fail-on` (default `breaking`; `never` always passes) | Every file is valid |
+| 1 | A finding at or above `--fail-on` | A file is invalid |
+| 2 | Usage error | Usage error |
+| 3 | A file is not a valid contract, or the two are of different kinds (with `--format json`, an error report is printed) | — |
+
+### Registry
+
+The registry API (`packages/api`) stores contract versions per workspace and service, with source metadata. It needs PostgreSQL; `compose.yaml` starts one. See [packages/api/README.md](packages/api/README.md) for setup and endpoints.
