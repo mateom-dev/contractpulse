@@ -95,4 +95,17 @@ node packages/cli/dist/index.js diff \
   fixtures/changes/orders.created.v2.schema.json
 ```
 
-`diff` prints one block per finding, BREAKING first: the rule, why it matters, the direction (who reads the data), the JSON Pointer and the old (`-`) and new (`+`) value, then the overall verdict. It exits 1 if either file is not a valid contract or the two are of different kinds.
+`diff` prints one block per finding, BREAKING first: the rule, why it matters, the direction (who reads the data), the JSON Pointer and the old (`-`) and new (`+`) value, then the overall verdict.
+
+For CI jobs and scripts, `--format json` prints the same findings as a versioned JSON report (`schemaVersion`, `verdict`, `summary`, both contracts' hashes, and each finding's rule, direction, OpenAPI location, pointers and values). `--fail-on` sets which verdict fails the run:
+
+```sh
+node packages/cli/dist/index.js diff --format json --fail-on unknown old.json new.json
+```
+
+| Exit code | `diff` | `validate` |
+| --- | --- | --- |
+| 0 | No finding at or above `--fail-on` (default `breaking`; `never` always passes) | Every file is valid |
+| 1 | A finding at or above `--fail-on` | A file is invalid |
+| 2 | Usage error | Usage error |
+| 3 | A file is not a valid contract, or the two are of different kinds (with `--format json`, an error report is printed) | — |

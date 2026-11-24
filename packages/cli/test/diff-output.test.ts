@@ -124,7 +124,7 @@ describe("contractpulse diff", () => {
       ["diff", fixture("contracts/orders.created.v1.schema.json"), fixture("changes/orders.created.v2.schema.json")],
       io,
     );
-    expect(code).toBe(0);
+    expect(code).toBe(1);
     expect(io.err).toBe("");
     expect(io.out).toContain("(json-schema https://json-schema.org/draft/2020-12/schema, version 1.0.0)");
     expect(io.out).toContain("BREAKING  field.removed\n          property customerId removed;");
@@ -145,22 +145,23 @@ describe("contractpulse diff", () => {
     expect(io.out).toContain("No differences found (the contracts are equivalent).");
   });
 
-  it("exits 1 when a file is not a valid contract", async () => {
+  it("exits 3 when a file is not a valid contract", async () => {
     const io = capture();
     const code = await run(["diff", fixture("contracts/orders-api.v1.openapi.json"), fixture("invalid/swagger-2.json")], io);
-    expect(code).toBe(1);
+    expect(code).toBe(3);
     expect(io.out).toBe("");
     expect(io.err).toContain("[UNSUPPORTED_VERSION]");
   });
 
-  it("exits 1 when the two contracts are of different kinds", async () => {
+  it("exits 3 when the two contracts are of different kinds", async () => {
     const io = capture();
     const code = await run(
       ["diff", fixture("contracts/orders-api.v1.openapi.json"), fixture("contracts/orders.created.v1.schema.json")],
       io,
     );
-    expect(code).toBe(1);
+    expect(code).toBe(3);
     expect(io.err).toContain("cannot compare");
+    expect(io.err).toContain("[KIND_MISMATCH]");
   });
 
   it("exits 2 without exactly two files", async () => {
@@ -176,7 +177,7 @@ describe("contractpulse diff", () => {
     const broken = join(dir, "broken.json");
     await writeFile(broken, "{");
     const io = capture();
-    expect(await run(["diff", join(dir, "missing.json"), broken], io)).toBe(1);
+    expect(await run(["diff", join(dir, "missing.json"), broken], io)).toBe(3);
     expect(io.err).toContain("[NOT_FOUND]");
     expect(io.err).toContain("[INVALID_JSON]");
   });
