@@ -80,4 +80,19 @@ flowchart LR
 
 ## Getting started
 
-Setup instructions will be added once the CLI is in place.
+Requires Node.js 20+ and pnpm 9.
+
+```sh
+pnpm install
+pnpm build
+
+# Check that files are supported contracts
+node packages/cli/dist/index.js validate fixtures/contracts/*.json
+
+# Compare two versions of the demo event
+node packages/cli/dist/index.js diff \
+  fixtures/contracts/orders.created.v1.schema.json \
+  fixtures/changes/orders.created.v2.schema.json
+```
+
+`diff` prints one block per finding, BREAKING first: the rule, why it matters, the direction (who reads the data), the JSON Pointer and the old (`-`) and new (`+`) value, then the overall verdict. It exits 1 if either file is not a valid contract or the two are of different kinds.

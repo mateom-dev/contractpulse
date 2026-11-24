@@ -1,9 +1,12 @@
-import { ContractError, loadContract } from "./contract.js";
+import { ContractError, loadContract, type LoadedContract } from "./contract.js";
+import { formatDiff } from "./report/text.js";
+import { CompareError, compareContracts } from "./rules/compare.js";
 
 export const USAGE = `Usage: contractpulse <command> [options]
 
 Commands:
   validate <file...>  Check that each file is a supported OpenAPI or JSON Schema contract
+  diff <old> <new>    Compare two versions of a contract and explain each change
   help                Show this message
 
 Compare API and event contract versions and report breaking changes.`;
@@ -45,7 +48,38 @@ async function validate(files: readonly string[], out: Output): Promise<number> 
   return failed === 0 ? 0 : 1;
 }
 
-/** Exit codes: 0 = all valid, 1 = at least one invalid contract, 2 = usage error. */
+async function diff(files: readonly string[], out: Output): Promise<number> {
+  if (files.length !== 2) {
+    out.stderr(`diff needs exactly two files: <old> <new>\n\n${USAGE}\n`);
+    return 2;
+  }
+
+  const loaded: LoadedContract[] = [];
+  for (const file of files) {
+    try {
+      loaded.push(await loadContract(file));
+    } catch (error) {
+      if (!(error instanceof ContractError)) throw error;
+      out.stderr(`error ${error.message} [${error.code}]\n`);
+    }
+  }
+  const [previous, next] = loaded;
+  if (previous === undefined || next === undefined || loaded.length !== 2) return 1;
+
+  try {
+    out.stdout(formatDiff(previous, next, compareContracts(previous, next)));
+  } catch (error) {
+    if (!(error instanceof CompareError)) throw error;
+    out.stderr(`error ${error.message}\n`);
+    return 1;
+  }
+  return 0;
+}
+
+/**
+ * Exit codes: 0 = success (every contract valid, or the comparison ran),
+ * 1 = an invalid contract or contracts that cannot be compared, 2 = usage error.
+ */
 export async function run(argv: readonly string[], out: Output = processOutput): Promise<number> {
   const [command, ...rest] = argv;
 
@@ -55,6 +89,9 @@ export async function run(argv: readonly string[], out: Output = processOutput):
   }
   if (command === "validate") {
     return validate(rest, out);
+  }
+  if (command === "diff") {
+    return diff(rest, out);
   }
 
   out.stderr(`Unknown command: ${command}\n\n${USAGE}\n`);
