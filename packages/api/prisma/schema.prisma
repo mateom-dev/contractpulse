@@ -1,0 +1,95 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// A tenant. Every service, contract and version belongs to exactly one.
+model Workspace {
+  id        String     @id @default(uuid()) @db.Uuid
+  slug      String     @unique
+  name      String
+  createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  tokens    ApiToken[]
+  services  Service[]
+
+  @@map("workspaces")
+}
+
+/// Bearer token scoped to one workspace. Only the SHA-256 of the token is stored.
+model ApiToken {
+  id          String    @id @default(uuid()) @db.Uuid
+  workspaceId String    @map("workspace_id") @db.Uuid
+  label       String
+  tokenHash   String    @unique @map("token_hash")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  revokedAt   DateTime? @map("revoked_at") @db.Timestamptz(3)
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@map("api_tokens")
+}
+
+model Service {
+  id          String     @id @default(uuid()) @db.Uuid
+  workspaceId String     @map("workspace_id") @db.Uuid
+  slug        String
+  name        String
+  description String?
+  createdAt   DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  workspace   Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  contracts   Contract[]
+
+  @@unique([workspaceId, slug])
+  @@unique([workspaceId, id])
+  @@map("services")
+}
+
+/// A named contract of a service, e.g. `orders-api` (OpenAPI) or `orders.created` (JSON Schema).
+/// The kind is fixed by the first imported version.
+model Contract {
+  id          String            @id @default(uuid()) @db.Uuid
+  workspaceId String            @map("workspace_id") @db.Uuid
+  serviceId   String            @map("service_id") @db.Uuid
+  name        String
+  /// `openapi` or `json-schema` (CHECK constraint in the migration)
+  kind        String
+  createdAt   DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  service     Service           @relation(fields: [workspaceId, serviceId], references: [workspaceId, id], onDelete: Cascade)
+  versions    ContractVersion[]
+
+  @@unique([serviceId, name])
+  @@unique([workspaceId, id])
+  @@map("contracts")
+}
+
+/// One imported revision of a contract. Append-only: a trigger rejects UPDATE.
+model ContractVersion {
+  id               String   @id @default(uuid()) @db.Uuid
+  workspaceId      String   @map("workspace_id") @db.Uuid
+  contractId       String   @map("contract_id") @db.Uuid
+  /// 1, 2, 3, … per contract, in import order
+  sequence         Int
+  kind             String
+  /// `info.version` (OpenAPI) or `version` / `x-version` (JSON Schema), when declared
+  declaredVersion  String?  @map("declared_version")
+  specVersion      String   @map("spec_version")
+  /// `sha256:<hex>` of the canonical form
+  hash             String
+  sizeBytes        Int      @map("size_bytes")
+  /// The file exactly as imported
+  content          String
+  sourcePath       String   @map("source_path")
+  sourceRepository String?  @map("source_repository")
+  sourceRef        String?  @map("source_ref")
+  importedBy       String   @map("imported_by")
+  importedAt       DateTime @default(now()) @map("imported_at") @db.Timestamptz(3)
+  contract         Contract @relation(fields: [workspaceId, contractId], references: [workspaceId, id], onDelete: Cascade)
+
+  @@unique([contractId, sequence])
+  @@index([workspaceId, hash])
+  @@map("contract_versions")
+}

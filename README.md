@@ -77,6 +77,7 @@ flowchart LR
 ## Documentation
 
 - [Initial rule scope](docs/rule-scope.md) — supported inputs, verdicts, direction and the first compatibility rules
+- [Registry API](packages/api/README.md) — workspaces, services and contract version history
 
 ## Getting started
 
@@ -109,3 +110,7 @@ node packages/cli/dist/index.js diff --format json --fail-on unknown old.json ne
 | 1 | A finding at or above `--fail-on` | A file is invalid |
 | 2 | Usage error | Usage error |
 | 3 | A file is not a valid contract, or the two are of different kinds (with `--format json`, an error report is printed) | — |
+
+### Registry
+
+The registry API (`packages/api`) stores contract versions per workspace and service, with source metadata. It needs PostgreSQL; `compose.yaml` starts one. See [packages/api/README.md](packages/api/README.md) for setup and endpoints.
