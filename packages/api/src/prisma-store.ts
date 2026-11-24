@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { ContractKind } from "@contractpulse/cli";
 import type {
@@ -132,15 +133,20 @@ export class PrismaRegistryStore implements RegistryStore {
       });
       if (!service) throw new NotFoundError("Service");
 
-      const contract = await tx.contract.upsert({
-        where: { serviceId_name: { serviceId: service.id, name: contractName } },
-        create: { workspaceId, serviceId: service.id, name: contractName, kind: input.kind },
-        update: {},
-      });
+      // Create the contract on its first import. Prisma's upsert reads before it
+      // inserts, so two concurrent first imports would both insert; ON CONFLICT
+      // lets the second wait for the first and reuse its row.
+      await tx.$executeRaw`
+        INSERT INTO contracts (id, workspace_id, service_id, name, kind)
+        VALUES (${randomUUID()}::uuid, ${workspaceId}::uuid, ${service.id}::uuid, ${contractName}, ${input.kind})
+        ON CONFLICT (service_id, name) DO NOTHING`;
+      // Lock the contract so concurrent imports get consecutive sequence numbers.
+      const [contract] = await tx.$queryRaw<{ id: string; kind: string }[]>`
+        SELECT id::text AS id, kind FROM contracts
+        WHERE workspace_id = ${workspaceId}::uuid AND service_id = ${service.id}::uuid AND name = ${contractName}
+        FOR UPDATE`;
+      if (!contract) throw new NotFoundError("Contract");
       if (contract.kind !== input.kind) throw new KindMismatchError(contractName, contract.kind, input.kind);
-
-      // Serialize imports per contract so sequence numbers never collide.
-      await tx.$queryRaw`SELECT id FROM contracts WHERE id = ${contract.id}::uuid FOR UPDATE`;
 
       const latest = await tx.contractVersion.findFirst({
         where: { workspaceId, contractId: contract.id },

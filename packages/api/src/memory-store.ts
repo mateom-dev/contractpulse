@@ -48,7 +48,7 @@ function summary(version: VersionDetail): VersionSummary {
 /** In-memory RegistryStore for tests and the local demo. Same rules as the PostgreSQL store. */
 export class MemoryRegistryStore implements RegistryStore {
   private readonly workspaces = new Map<string, Workspace>();
-  private readonly tokens = new Map<string, { workspaceId: string; label: string }>();
+  private readonly tokens = new Map<string, { workspaceId: string; label: string; revoked: boolean }>();
   private readonly services: StoredService[] = [];
   private readonly contracts: StoredContract[] = [];
   private clock: () => Date;
@@ -63,14 +63,15 @@ export class MemoryRegistryStore implements RegistryStore {
     return workspace;
   }
 
-  addToken(workspaceId: string, token: string, label: string): void {
-    this.tokens.set(hashToken(token), { workspaceId, label });
+  addToken(workspaceId: string, token: string, label: string, options: { revoked?: boolean } = {}): void {
+    this.tokens.set(hashToken(token), { workspaceId, label, revoked: options.revoked ?? false });
   }
 
   async findCaller(tokenHash: string): Promise<Caller | null> {
     const token = this.tokens.get(tokenHash);
-    const workspace = token && this.workspaces.get(token.workspaceId);
-    return token && workspace ? { workspace: { ...workspace }, tokenLabel: token.label } : null;
+    if (!token || token.revoked) return null;
+    const workspace = this.workspaces.get(token.workspaceId);
+    return workspace ? { workspace: { ...workspace }, tokenLabel: token.label } : null;
   }
 
   async listServices(workspaceId: string): Promise<ServiceSummary[]> {

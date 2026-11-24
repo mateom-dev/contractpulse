@@ -62,4 +62,15 @@ curl -s -X POST localhost:3001/v1/workspaces/demo/services/orders/contracts/orde
   -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' -d @-
 ```
 
-Tests (`pnpm test`) run against an in-memory store with the same rules and need no database.
+## Tests
+
+`pnpm test` runs the HTTP tests and a shared store suite (`test/store-suite.ts`) against the in-memory store; no database needed. The same suite covers version numbering, duplicate and revert handling, exact content and source, kind locking, concurrent imports and workspace isolation.
+
+To run it against PostgreSQL as well, point `CONTRACTPULSE_TEST_DATABASE_URL` at a database with the migrations applied:
+
+```sh
+cd packages/api
+CONTRACTPULSE_TEST_DATABASE_URL=postgresql://contractpulse:contractpulse@localhost:5432/contractpulse pnpm test
+```
+
+The PostgreSQL run also checks the database rules directly: versions can't be updated, a version can't reference another workspace's contract, and sequence numbers are unique per contract. It creates its own workspaces and deletes them afterwards. CI runs it in the `registry-database` job.

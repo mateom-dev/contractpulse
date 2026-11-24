@@ -105,3 +105,8 @@ jobs:
         run: |
           pnpm --filter @contractpulse/api db:seed
           pnpm --filter @contractpulse/api db:seed
+
+      - name: Run the store tests against PostgreSQL
+        env:
+          CONTRACTPULSE_TEST_DATABASE_URL: postgresql://contractpulse:contractpulse@localhost:5432/contractpulse
+        run: pnpm --filter @contractpulse/api exec prisma generate && pnpm --filter @contractpulse/api test
