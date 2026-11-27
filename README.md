@@ -114,3 +114,19 @@ node packages/cli/dist/index.js diff --format json --fail-on unknown old.json ne
 ### Registry
 
 The registry API (`packages/api`) stores contract versions per workspace and service, with source metadata. It needs PostgreSQL; `compose.yaml` starts one. See [packages/api/README.md](packages/api/README.md) for setup and endpoints.
+
+### Web UI
+
+`packages/web` is a Next.js app over the registry: services, each contract's version history and registered consumers, and for any version the impact on every consumer — status, the version it is pinned to, the fields it uses, and each finding's field, rule, direction and before/after values. It reads the API on the server with a workspace token, so the token never reaches the browser.
+
+```sh
+# with the registry running on :3001 and the demo workspace seeded
+cp packages/web/.env.example packages/web/.env.local
+pnpm --filter @contractpulse/web dev    # http://localhost:3000
+```
+
+| Variable | Default | |
+| --- | --- | --- |
+| `CONTRACTPULSE_API_URL` | `http://127.0.0.1:3001` | Registry API |
+| `CONTRACTPULSE_WORKSPACE` | `demo` | Workspace slug to show |
+| `CONTRACTPULSE_API_TOKEN` | — | Bearer token for that workspace (required) |
