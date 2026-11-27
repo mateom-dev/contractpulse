@@ -42,6 +42,8 @@ model Service {
   createdAt   DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
   workspace   Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   contracts   Contract[]
+  /// Contracts of other services this service consumes
+  consumes    Dependency[]
 
   @@unique([workspaceId, slug])
   @@unique([workspaceId, id])
@@ -60,9 +62,11 @@ model Contract {
   createdAt   DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
   service     Service           @relation(fields: [workspaceId, serviceId], references: [workspaceId, id], onDelete: Cascade)
   versions    ContractVersion[]
+  consumers   Dependency[]
 
   @@unique([serviceId, name])
   @@unique([workspaceId, id])
+  @@unique([workspaceId, serviceId, id])
   @@map("contracts")
 }
 
@@ -88,8 +92,36 @@ model ContractVersion {
   importedBy       String   @map("imported_by")
   importedAt       DateTime @default(now()) @map("imported_at") @db.Timestamptz(3)
   contract         Contract @relation(fields: [workspaceId, contractId], references: [workspaceId, id], onDelete: Cascade)
+  dependencies     Dependency[]
 
   @@unique([contractId, sequence])
   @@index([workspaceId, hash])
   @@map("contract_versions")
+}
+
+/// A registered consumer: the consumer service reads a contract of another
+/// service (the provider) and is known to work with one version of it.
+/// Composite foreign keys keep all three in one workspace; a CHECK in the
+/// migration rejects a service consuming its own contract.
+model Dependency {
+  id                String          @id @default(uuid()) @db.Uuid
+  workspaceId       String          @map("workspace_id") @db.Uuid
+  consumerServiceId String          @map("consumer_service_id") @db.Uuid
+  providerServiceId String          @map("provider_service_id") @db.Uuid
+  contractId        String          @map("contract_id") @db.Uuid
+  /// The contract version the consumer was built and tested against
+  versionSequence   Int             @map("version_sequence")
+  /// JSON Pointers into that version the consumer relies on; empty = the whole contract
+  uses              String[]
+  note              String?
+  recordedBy        String          @map("recorded_by")
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime        @default(now()) @map("updated_at") @db.Timestamptz(3)
+  consumer          Service         @relation(fields: [workspaceId, consumerServiceId], references: [workspaceId, id], onDelete: Cascade)
+  contract          Contract        @relation(fields: [workspaceId, providerServiceId, contractId], references: [workspaceId, serviceId, id], onDelete: Cascade)
+  version           ContractVersion @relation(fields: [contractId, versionSequence], references: [contractId, sequence], onDelete: Cascade)
+
+  @@unique([consumerServiceId, contractId])
+  @@index([workspaceId, contractId])
+  @@map("dependencies")
 }

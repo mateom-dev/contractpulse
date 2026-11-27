@@ -7,3 +7,4 @@ export type { ContractErrorCode, ContractKind, LoadedContract } from "./contract
 export { DEFAULT_LIMITS } from "./engine/bounds.js";
 export type { ParseLimits } from "./engine/bounds.js";
 export { canonicalJson, canonicalize, contractHash } from "./engine/canonical.js";
+export { getAtPointer } from "./engine/refs.js";

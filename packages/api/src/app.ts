@@ -1,8 +1,8 @@
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import { z, ZodError } from "zod";
-import { ContractError, MAX_CONTRACT_BYTES, parseContract } from "@contractpulse/cli";
-import type { Caller, NewVersion } from "./domain.js";
-import { HttpError, NotFoundError } from "./errors.js";
+import { ContractError, MAX_CONTRACT_BYTES, getAtPointer, parseContract } from "@contractpulse/cli";
+import type { Caller, DependencyKey, NewVersion } from "./domain.js";
+import { HttpError, NotFoundError, SelfDependencyError, UnknownVersionError } from "./errors.js";
 import type { RegistryStore } from "./store.js";
 import { hashToken } from "./tokens.js";
 
@@ -28,6 +28,28 @@ const contractParams = serviceParams.extend({ contract: contractName });
 const versionParams = contractParams.extend({
   sequence: z.coerce.number().int().min(1).max(2_147_483_647),
 });
+
+const dependencyParams = serviceParams.extend({ provider: slug, contract: contractName });
+
+/** RFC 6901 JSON Pointer to something inside the document (not the root itself). */
+const jsonPointer = z
+  .string()
+  .max(500)
+  .regex(/^(\/([^~/]|~[01])*)+$/, "must be a JSON Pointer such as /properties/orderId");
+
+const putDependencyBody = z
+  .object({
+    /** The provider's contract version the consumer was built and tested against. */
+    version: z.number().int().min(1).max(2_147_483_647),
+    /** Parts of that version the consumer relies on; omitted or empty means the whole contract. */
+    uses: z.array(jsonPointer).max(200).optional(),
+    note: z.string().trim().max(500).optional(),
+  })
+  .strict();
+
+/** Said with every consumer list so a short list isn't read as "nobody else uses this". */
+const CONSUMER_COVERAGE =
+  "Only consumers registered in this workspace are listed; unregistered clients of this contract are not known.";
 
 const createServiceBody = z
   .object({
@@ -183,6 +205,81 @@ export function buildApp(options: AppOptions): FastifyInstance {
     const version = await store.findVersion(workspace.id, params.service, params.contract, params.sequence);
     if (!version) throw new NotFoundError("Contract version");
     return { version };
+  });
+
+  /**
+   * Register (or replace) the service's dependency on another service's
+   * contract. Every pointer in `uses` must exist in the pinned version, so a
+   * typo can't silently hide the consumer from impact reports later.
+   */
+  app.put("/v1/workspaces/:workspace/services/:service/dependencies/:provider/:contract", async (request, reply) => {
+    const params = dependencyParams.parse(request.params);
+    const caller = await authorize(request, params.workspace);
+    const body = putDependencyBody.parse(request.body);
+    const workspaceId = caller.workspace.id;
+
+    if (!(await store.findService(workspaceId, params.service))) throw new NotFoundError("Consumer service");
+    if (params.provider === params.service) throw new SelfDependencyError(params.service);
+    const version = await store.findVersion(workspaceId, params.provider, params.contract, body.version);
+    if (!version) {
+      if (!(await store.listVersions(workspaceId, params.provider, params.contract))) throw new NotFoundError("Contract");
+      throw new UnknownVersionError(params.contract, body.version);
+    }
+
+    const uses = [...new Set(body.uses ?? [])].sort();
+    if (uses.length > 0) {
+      const { document } = parseContract(version.source.path, version.content);
+      const missing = uses.filter((pointer) => getAtPointer(document, pointer) === undefined);
+      if (missing.length > 0) {
+        throw new HttpError(
+          422,
+          "UNKNOWN_POINTER",
+          `Version ${body.version} of "${params.contract}" has nothing at ${missing.join(", ")}`,
+          { pointers: missing },
+        );
+      }
+    }
+
+    const key: DependencyKey = {
+      consumerSlug: params.service,
+      providerSlug: params.provider,
+      contractName: params.contract,
+    };
+    const result = await store.putDependency(workspaceId, key, {
+      versionSequence: body.version,
+      uses,
+      note: body.note || null,
+      recordedBy: caller.tokenLabel,
+    });
+    return reply.status(result.created ? 201 : 200).send(result);
+  });
+
+  app.delete("/v1/workspaces/:workspace/services/:service/dependencies/:provider/:contract", async (request, reply) => {
+    const params = dependencyParams.parse(request.params);
+    const { workspace } = await authorize(request, params.workspace);
+    const removed = await store.removeDependency(workspace.id, {
+      consumerSlug: params.service,
+      providerSlug: params.provider,
+      contractName: params.contract,
+    });
+    if (!removed) throw new NotFoundError("Dependency");
+    return reply.status(204).send();
+  });
+
+  app.get("/v1/workspaces/:workspace/services/:service/dependencies", async (request) => {
+    const params = serviceParams.parse(request.params);
+    const { workspace } = await authorize(request, params.workspace);
+    const dependencies = await store.listDependencies(workspace.id, params.service);
+    if (!dependencies) throw new NotFoundError("Service");
+    return { dependencies };
+  });
+
+  app.get("/v1/workspaces/:workspace/services/:service/contracts/:contract/consumers", async (request) => {
+    const params = contractParams.parse(request.params);
+    const { workspace } = await authorize(request, params.workspace);
+    const consumers = await store.listConsumers(workspace.id, params.service, params.contract);
+    if (!consumers) throw new NotFoundError("Contract");
+    return { consumers, coverage: CONSUMER_COVERAGE };
   });
 
   return app;

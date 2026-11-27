@@ -4,8 +4,12 @@ import type {
   AddVersionResult,
   Caller,
   ContractSummary,
+  Dependency,
+  DependencyKey,
+  NewDependency,
   NewService,
   NewVersion,
+  PutDependencyResult,
   Service,
   ServiceDetail,
   ServiceSummary,
@@ -13,7 +17,13 @@ import type {
   VersionSummary,
   Workspace,
 } from "./domain.js";
-import { KindMismatchError, NotFoundError, SlugTakenError } from "./errors.js";
+import {
+  KindMismatchError,
+  NotFoundError,
+  SelfDependencyError,
+  SlugTakenError,
+  UnknownVersionError,
+} from "./errors.js";
 import type { RegistryStore } from "./store.js";
 import { hashToken } from "./tokens.js";
 
@@ -30,6 +40,22 @@ interface StoredContract {
   createdAt: Date;
   versions: VersionDetail[];
 }
+
+interface StoredDependency {
+  workspaceId: string;
+  consumerServiceId: string;
+  contractId: string;
+  versionSequence: number;
+  uses: string[];
+  note: string | null;
+  recordedBy: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const compare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+const byProviderThenContract = (a: Dependency, b: Dependency) =>
+  compare(a.provider.slug, b.provider.slug) || compare(a.contract.name, b.contract.name);
 
 function summary(version: VersionDetail): VersionSummary {
   return {
@@ -51,6 +77,7 @@ export class MemoryRegistryStore implements RegistryStore {
   private readonly tokens = new Map<string, { workspaceId: string; label: string; revoked: boolean }>();
   private readonly services: StoredService[] = [];
   private readonly contracts: StoredContract[] = [];
+  private readonly dependencies: StoredDependency[] = [];
   private clock: () => Date;
 
   constructor(options: { clock?: () => Date } = {}) {
@@ -169,6 +196,97 @@ export class MemoryRegistryStore implements RegistryStore {
     const contract = service && this.contract(service, contractName);
     const version = contract?.versions.find((item) => item.sequence === sequence);
     return version ? { ...version, source: { ...version.source } } : null;
+  }
+
+  async putDependency(workspaceId: string, key: DependencyKey, input: NewDependency): Promise<PutDependencyResult> {
+    const consumer = this.service(workspaceId, key.consumerSlug);
+    if (!consumer) throw new NotFoundError("Consumer service");
+    const provider = this.service(workspaceId, key.providerSlug);
+    if (!provider) throw new NotFoundError("Provider service");
+    if (provider.id === consumer.id) throw new SelfDependencyError(consumer.slug);
+    const contract = this.contract(provider, key.contractName);
+    if (!contract) throw new NotFoundError("Contract");
+    if (!contract.versions.some((item) => item.sequence === input.versionSequence)) {
+      throw new UnknownVersionError(contract.name, input.versionSequence);
+    }
+
+    const now = this.clock();
+    const existing = this.findDependency(consumer.id, contract.id);
+    const fields = {
+      versionSequence: input.versionSequence,
+      uses: [...input.uses],
+      note: input.note,
+      recordedBy: input.recordedBy,
+      updatedAt: now,
+    };
+    if (existing) {
+      Object.assign(existing, fields);
+      return { dependency: this.publicDependency(existing), created: false };
+    }
+    const stored: StoredDependency = {
+      workspaceId,
+      consumerServiceId: consumer.id,
+      contractId: contract.id,
+      createdAt: now,
+      ...fields,
+    };
+    this.dependencies.push(stored);
+    return { dependency: this.publicDependency(stored), created: true };
+  }
+
+  async removeDependency(workspaceId: string, key: DependencyKey): Promise<boolean> {
+    const consumer = this.service(workspaceId, key.consumerSlug);
+    const provider = this.service(workspaceId, key.providerSlug);
+    const contract = provider && this.contract(provider, key.contractName);
+    if (!consumer || !contract) return false;
+    const index = this.dependencies.findIndex(
+      (item) => item.consumerServiceId === consumer.id && item.contractId === contract.id,
+    );
+    if (index < 0) return false;
+    this.dependencies.splice(index, 1);
+    return true;
+  }
+
+  async listDependencies(workspaceId: string, consumerSlug: string): Promise<Dependency[] | null> {
+    const consumer = this.service(workspaceId, consumerSlug);
+    if (!consumer) return null;
+    return this.dependencies
+      .filter((item) => item.workspaceId === workspaceId && item.consumerServiceId === consumer.id)
+      .map((item) => this.publicDependency(item))
+      .sort(byProviderThenContract);
+  }
+
+  async listConsumers(workspaceId: string, providerSlug: string, contractName: string): Promise<Dependency[] | null> {
+    const provider = this.service(workspaceId, providerSlug);
+    const contract = provider && this.contract(provider, contractName);
+    if (!contract) return null;
+    return this.dependencies
+      .filter((item) => item.workspaceId === workspaceId && item.contractId === contract.id)
+      .map((item) => this.publicDependency(item))
+      .sort((a, b) => compare(a.consumer.slug, b.consumer.slug));
+  }
+
+  private findDependency(consumerServiceId: string, contractId: string): StoredDependency | undefined {
+    return this.dependencies.find((item) => item.consumerServiceId === consumerServiceId && item.contractId === contractId);
+  }
+
+  private publicDependency(stored: StoredDependency): Dependency {
+    const consumer = this.services.find((service) => service.id === stored.consumerServiceId);
+    const contract = this.contracts.find((item) => item.id === stored.contractId);
+    const provider = contract && this.services.find((service) => service.id === contract.serviceId);
+    const version = contract?.versions.find((item) => item.sequence === stored.versionSequence);
+    if (!consumer || !contract || !provider || !version) throw new Error("dangling dependency");
+    return {
+      consumer: { slug: consumer.slug, name: consumer.name },
+      provider: { slug: provider.slug, name: provider.name },
+      contract: { name: contract.name, kind: contract.kind, latestSequence: contract.versions.at(-1)?.sequence ?? 0 },
+      version: { sequence: version.sequence, hash: version.hash, declaredVersion: version.declaredVersion },
+      uses: [...stored.uses],
+      note: stored.note,
+      recordedBy: stored.recordedBy,
+      createdAt: stored.createdAt,
+      updatedAt: stored.updatedAt,
+    };
   }
 
   private service(workspaceId: string, slug: string): StoredService | undefined {

@@ -84,3 +84,46 @@ export interface AddVersionResult {
   /** False when the content matched the latest version, which is returned instead. */
   created: boolean;
 }
+
+/** A service as shown on either side of a dependency. */
+export interface ServiceRef {
+  slug: string;
+  name: string;
+}
+
+/**
+ * A registered consumer: `consumer` reads `contract` of `provider` and is known
+ * to work with version `version.sequence`. `uses` lists the JSON Pointers into
+ * that version the consumer relies on; empty means the whole contract.
+ */
+export interface Dependency {
+  consumer: ServiceRef;
+  provider: ServiceRef;
+  contract: { name: string; kind: ContractKind; latestSequence: number };
+  version: { sequence: number; hash: string; declaredVersion: string | null };
+  uses: string[];
+  note: string | null;
+  recordedBy: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface DependencyKey {
+  consumerSlug: string;
+  providerSlug: string;
+  contractName: string;
+}
+
+export interface NewDependency {
+  versionSequence: number;
+  /** Sorted, without duplicates. */
+  uses: string[];
+  note: string | null;
+  recordedBy: string;
+}
+
+export interface PutDependencyResult {
+  dependency: Dependency;
+  /** False when an existing dependency was replaced. */
+  created: boolean;
+}

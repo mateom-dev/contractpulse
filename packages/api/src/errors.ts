@@ -30,3 +30,15 @@ export class KindMismatchError extends HttpError {
     });
   }
 }
+
+export class SelfDependencyError extends HttpError {
+  constructor(service: string) {
+    super(422, "SELF_DEPENDENCY", `Service "${service}" can't be registered as a consumer of its own contract`);
+  }
+}
+
+export class UnknownVersionError extends HttpError {
+  constructor(contract: string, sequence: number) {
+    super(422, "UNKNOWN_VERSION", `Contract "${contract}" has no version ${sequence}`, { sequence });
+  }
+}

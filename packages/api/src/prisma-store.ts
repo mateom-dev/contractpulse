@@ -4,15 +4,25 @@ import type { ContractKind } from "@contractpulse/cli";
 import type {
   AddVersionResult,
   Caller,
+  Dependency,
+  DependencyKey,
+  NewDependency,
   NewService,
   NewVersion,
+  PutDependencyResult,
   Service,
   ServiceDetail,
   ServiceSummary,
   VersionDetail,
   VersionSummary,
 } from "./domain.js";
-import { KindMismatchError, NotFoundError, SlugTakenError } from "./errors.js";
+import {
+  KindMismatchError,
+  NotFoundError,
+  SelfDependencyError,
+  SlugTakenError,
+  UnknownVersionError,
+} from "./errors.js";
 import type { RegistryStore } from "./store.js";
 
 type VersionRow = Prisma.ContractVersionGetPayload<object>;
@@ -49,6 +59,39 @@ function toSummary(row: SummaryRow): VersionSummary {
     source: { path: row.sourcePath, repository: row.sourceRepository, ref: row.sourceRef },
     importedBy: row.importedBy,
     importedAt: row.importedAt,
+  };
+}
+
+const dependencyInclude = {
+  consumer: { select: { slug: true, name: true } },
+  contract: {
+    select: {
+      name: true,
+      kind: true,
+      service: { select: { slug: true, name: true } },
+      versions: { orderBy: { sequence: "desc" }, take: 1, select: { sequence: true } },
+    },
+  },
+  version: { select: { sequence: true, hash: true, declaredVersion: true } },
+} satisfies Prisma.DependencyInclude;
+
+type DependencyRow = Prisma.DependencyGetPayload<{ include: typeof dependencyInclude }>;
+
+function toDependency(row: DependencyRow): Dependency {
+  return {
+    consumer: { slug: row.consumer.slug, name: row.consumer.name },
+    provider: { slug: row.contract.service.slug, name: row.contract.service.name },
+    contract: {
+      name: row.contract.name,
+      kind: toKind(row.contract.kind),
+      latestSequence: row.contract.versions[0]?.sequence ?? 0,
+    },
+    version: { sequence: row.version.sequence, hash: row.version.hash, declaredVersion: row.version.declaredVersion },
+    uses: [...row.uses],
+    note: row.note,
+    recordedBy: row.recordedBy,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
   };
 }
 
@@ -201,6 +244,90 @@ export class PrismaRegistryStore implements RegistryStore {
       select: { ...summarySelect, content: true },
     });
     return row ? { ...toSummary(row), content: row.content } : null;
+  }
+
+  async putDependency(workspaceId: string, key: DependencyKey, input: NewDependency): Promise<PutDependencyResult> {
+    return this.prisma.$transaction(async (tx) => {
+      const consumer = await tx.service.findUnique({
+        where: { workspaceId_slug: { workspaceId, slug: key.consumerSlug } },
+        select: { id: true, slug: true },
+      });
+      if (!consumer) throw new NotFoundError("Consumer service");
+      const provider = await tx.service.findUnique({
+        where: { workspaceId_slug: { workspaceId, slug: key.providerSlug } },
+        select: { id: true },
+      });
+      if (!provider) throw new NotFoundError("Provider service");
+      if (provider.id === consumer.id) throw new SelfDependencyError(consumer.slug);
+      const contract = await tx.contract.findFirst({
+        where: { workspaceId, serviceId: provider.id, name: key.contractName },
+        select: { id: true, name: true },
+      });
+      if (!contract) throw new NotFoundError("Contract");
+      const version = await tx.contractVersion.findUnique({
+        where: { contractId_sequence: { contractId: contract.id, sequence: input.versionSequence } },
+        select: { id: true },
+      });
+      if (!version) throw new UnknownVersionError(contract.name, input.versionSequence);
+
+      // One statement, so concurrent first registrations of the same pair can't
+      // both insert; `xmax = 0` is true only for a freshly inserted row.
+      const [row] = await tx.$queryRaw<{ id: string; created: boolean }[]>`
+        INSERT INTO dependencies (
+          id, workspace_id, consumer_service_id, provider_service_id, contract_id,
+          version_sequence, uses, note, recorded_by
+        )
+        VALUES (
+          ${randomUUID()}::uuid, ${workspaceId}::uuid, ${consumer.id}::uuid, ${provider.id}::uuid, ${contract.id}::uuid,
+          ${input.versionSequence}, ${input.uses}::text[], ${input.note}, ${input.recordedBy}
+        )
+        ON CONFLICT (consumer_service_id, contract_id) DO UPDATE SET
+          version_sequence = EXCLUDED.version_sequence,
+          uses = EXCLUDED.uses,
+          note = EXCLUDED.note,
+          recorded_by = EXCLUDED.recorded_by,
+          updated_at = CURRENT_TIMESTAMP
+        RETURNING id::text AS id, (xmax = 0) AS created`;
+      if (!row) throw new Error("dependency upsert returned no row");
+      const stored = await tx.dependency.findUniqueOrThrow({ where: { id: row.id }, include: dependencyInclude });
+      return { dependency: toDependency(stored), created: row.created };
+    });
+  }
+
+  async removeDependency(workspaceId: string, key: DependencyKey): Promise<boolean> {
+    const { count } = await this.prisma.dependency.deleteMany({
+      where: {
+        workspaceId,
+        consumer: { workspaceId, slug: key.consumerSlug },
+        contract: { workspaceId, name: key.contractName, service: { workspaceId, slug: key.providerSlug } },
+      },
+    });
+    return count > 0;
+  }
+
+  async listDependencies(workspaceId: string, consumerSlug: string): Promise<Dependency[] | null> {
+    const consumer = await this.prisma.service.findUnique({
+      where: { workspaceId_slug: { workspaceId, slug: consumerSlug } },
+      select: { id: true },
+    });
+    if (!consumer) return null;
+    const rows = await this.prisma.dependency.findMany({
+      where: { workspaceId, consumerServiceId: consumer.id },
+      include: dependencyInclude,
+      orderBy: [{ contract: { service: { slug: "asc" } } }, { contract: { name: "asc" } }],
+    });
+    return rows.map(toDependency);
+  }
+
+  async listConsumers(workspaceId: string, providerSlug: string, contractName: string): Promise<Dependency[] | null> {
+    const contract = await this.findContract(workspaceId, providerSlug, contractName);
+    if (!contract) return null;
+    const rows = await this.prisma.dependency.findMany({
+      where: { workspaceId, contractId: contract.id },
+      include: dependencyInclude,
+      orderBy: { consumer: { slug: "asc" } },
+    });
+    return rows.map(toDependency);
   }
 
   private findContract(workspaceId: string, serviceSlug: string, contractName: string) {

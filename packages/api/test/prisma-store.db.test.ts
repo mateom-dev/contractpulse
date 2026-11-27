@@ -118,5 +118,67 @@ describe.skipIf(!databaseUrl)("PostgreSQL registry", () => {
         }),
       ).rejects.toMatchObject({ code: "P2002" });
     });
+
+    describe("dependencies", () => {
+      /** Rows for a direct insert: `orders` publishes the contract, `shipping` consumes it. */
+      async function dependencyRows(label: string) {
+        const { workspace, contract } = await workspaceWithVersion(label);
+        const shipping = await store.createService(workspace.id, { slug: "shipping", name: "Shipping", description: null });
+        return {
+          workspaceId: workspace.id,
+          consumerServiceId: shipping.id,
+          providerServiceId: contract.serviceId,
+          contractId: contract.id,
+          versionSequence: 1,
+          uses: [] as string[],
+          recordedBy: "db-test",
+        };
+      }
+
+      it("refuses a service consuming its own contract", async () => {
+        const row = await dependencyRows("self");
+        await expect(
+          prisma.dependency.create({ data: { ...row, consumerServiceId: row.providerServiceId } }),
+        ).rejects.toThrow(/dependencies_not_self_check/);
+      });
+
+      it("refuses a version the contract doesn't have", async () => {
+        const row = await dependencyRows("noversion");
+        await expect(prisma.dependency.create({ data: { ...row, versionSequence: 2 } })).rejects.toBeInstanceOf(
+          Prisma.PrismaClientKnownRequestError,
+        );
+      });
+
+      it("refuses a consumer or contract from another workspace", async () => {
+        const row = await dependencyRows("depowner");
+        const other = await dependencyRows("depother");
+        await expect(
+          prisma.dependency.create({ data: { ...row, consumerServiceId: other.consumerServiceId } }),
+        ).rejects.toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
+        await expect(
+          prisma.dependency.create({
+            data: { ...row, providerServiceId: other.providerServiceId, contractId: other.contractId },
+          }),
+        ).rejects.toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
+        // The contract must belong to the named provider service.
+        const billing = await store.createService(row.workspaceId, { slug: "billing", name: "Billing", description: null });
+        await expect(
+          prisma.dependency.create({ data: { ...row, providerServiceId: billing.id } }),
+        ).rejects.toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
+        expect(await prisma.dependency.count({ where: { workspaceId: row.workspaceId } })).toBe(0);
+      });
+
+      it("refuses null pointers and goes away with the consumer", async () => {
+        const row = await dependencyRows("cascade");
+        await expect(
+          prisma.$executeRaw`INSERT INTO dependencies (id, workspace_id, consumer_service_id, provider_service_id, contract_id, version_sequence, uses, recorded_by)
+            VALUES (${randomUUID()}::uuid, ${row.workspaceId}::uuid, ${row.consumerServiceId}::uuid, ${row.providerServiceId}::uuid,
+                    ${row.contractId}::uuid, 1, ARRAY[NULL]::text[], 'db-test')`,
+        ).rejects.toThrow(/dependencies_uses_check/);
+        await prisma.dependency.create({ data: row });
+        await prisma.service.delete({ where: { id: row.consumerServiceId } });
+        expect(await prisma.dependency.count({ where: { workspaceId: row.workspaceId } })).toBe(0);
+      });
+    });
   });
 });

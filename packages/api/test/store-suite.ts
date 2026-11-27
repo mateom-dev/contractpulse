@@ -7,8 +7,14 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parseContract } from "@contractpulse/cli";
-import type { NewVersion, Workspace } from "../src/domain.js";
-import { KindMismatchError, NotFoundError, SlugTakenError } from "../src/errors.js";
+import type { DependencyKey, NewDependency, NewVersion, Workspace } from "../src/domain.js";
+import {
+  KindMismatchError,
+  NotFoundError,
+  SelfDependencyError,
+  SlugTakenError,
+  UnknownVersionError,
+} from "../src/errors.js";
 import type { RegistryStore } from "../src/store.js";
 import { hashToken } from "../src/tokens.js";
 
@@ -49,6 +55,16 @@ export function schemaWith(...fields: string[]): string {
   const properties = Object.fromEntries(fields.map((field) => [field, { type: "string" }]));
   return JSON.stringify({ $schema: "https://json-schema.org/draft/2020-12/schema", type: "object", properties });
 }
+
+export function dependency(overrides: Partial<NewDependency> = {}): NewDependency {
+  return { versionSequence: 1, uses: [], note: null, recordedBy: "store-tests", ...overrides };
+}
+
+const SHIPPING_ON_ORDERS: DependencyKey = {
+  consumerSlug: "shipping",
+  providerSlug: "orders",
+  contractName: "orders.created",
+};
 
 let tokenCounter = 0;
 const newToken = () => `cp_store_test_token_${process.pid}_${Date.now()}_${tokenCounter++}`;
@@ -199,6 +215,151 @@ export function describeRegistryStore(name: string, createHarness: () => Promise
         expect(results.every((result) => result.created)).toBe(true);
         expect(results.map((result) => result.version.sequence).sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
         expect(await store.listVersions(id, "orders", "concurrent.event")).toHaveLength(8);
+      });
+    });
+
+    describe("consumer dependencies", () => {
+      /** `orders` publishes orders.created v1 and v2; `shipping` and `billing` can consume it. */
+      async function ordersWithConsumers(label = "deps"): Promise<Workspace> {
+        const workspace = await freshWorkspace(label);
+        for (const slug of ["shipping", "billing"]) {
+          await store.createService(workspace.id, { slug, name: slug[0]!.toUpperCase() + slug.slice(1), description: null });
+        }
+        await store.addVersion(workspace.id, "orders", "orders.created", version(ORDERS_V1));
+        await store.addVersion(workspace.id, "orders", "orders.created", version(ORDERS_V2));
+        return workspace;
+      }
+
+      it("records a consumer and shows it from both sides", async () => {
+        const { id } = await ordersWithConsumers();
+        const result = await store.putDependency(
+          id,
+          SHIPPING_ON_ORDERS,
+          dependency({ uses: ["/properties/orderId", "/required"], note: "Label printing" }),
+        );
+        expect(result.created).toBe(true);
+        expect(result.dependency).toMatchObject({
+          consumer: { slug: "shipping", name: "Shipping" },
+          provider: { slug: "orders", name: "Orders" },
+          contract: { name: "orders.created", kind: "json-schema", latestSequence: 2 },
+          version: { sequence: 1, hash: version(ORDERS_V1).hash },
+          uses: ["/properties/orderId", "/required"],
+          note: "Label printing",
+          recordedBy: "store-tests",
+        });
+
+        expect(await store.listDependencies(id, "shipping")).toEqual([result.dependency]);
+        expect(await store.listConsumers(id, "orders", "orders.created")).toEqual([result.dependency]);
+        expect(await store.listDependencies(id, "billing")).toEqual([]);
+      });
+
+      it("replaces the record for the same consumer and contract", async () => {
+        const { id } = await ordersWithConsumers();
+        const first = await store.putDependency(id, SHIPPING_ON_ORDERS, dependency({ uses: ["/properties/orderId"] }));
+        const second = await store.putDependency(
+          id,
+          SHIPPING_ON_ORDERS,
+          dependency({ versionSequence: 2, uses: [], recordedBy: "shipping-ci" }),
+        );
+        expect(second.created).toBe(false);
+        expect(second.dependency).toMatchObject({ version: { sequence: 2 }, uses: [], note: null, recordedBy: "shipping-ci" });
+        expect(second.dependency.createdAt).toEqual(first.dependency.createdAt);
+        expect(second.dependency.updatedAt.getTime()).toBeGreaterThanOrEqual(first.dependency.updatedAt.getTime());
+        expect(await store.listConsumers(id, "orders", "orders.created")).toHaveLength(1);
+      });
+
+      it("keeps the pinned version when the provider imports a new one", async () => {
+        const { id } = await ordersWithConsumers();
+        await store.putDependency(id, SHIPPING_ON_ORDERS, dependency());
+        await store.addVersion(id, "orders", "orders.created", version(schemaWith("orderId", "total", "currency")));
+        const [consumer] = (await store.listConsumers(id, "orders", "orders.created")) ?? [];
+        expect(consumer?.version.sequence).toBe(1);
+        expect(consumer?.contract.latestSequence).toBe(3);
+      });
+
+      it("lists a service's dependencies by provider, then contract", async () => {
+        const { id } = await ordersWithConsumers();
+        await store.addVersion(id, "billing", "invoice.paid", version(schemaWith("invoiceId")));
+        await store.addVersion(id, "orders", "order.cancelled", version(schemaWith("orderId")));
+        await store.putDependency(id, SHIPPING_ON_ORDERS, dependency());
+        await store.putDependency(id, { ...SHIPPING_ON_ORDERS, contractName: "order.cancelled" }, dependency());
+        await store.putDependency(
+          id,
+          { consumerSlug: "shipping", providerSlug: "billing", contractName: "invoice.paid" },
+          dependency(),
+        );
+        await store.putDependency(id, { ...SHIPPING_ON_ORDERS, consumerSlug: "billing" }, dependency({ versionSequence: 2 }));
+
+        expect((await store.listDependencies(id, "shipping"))?.map((item) => `${item.provider.slug}/${item.contract.name}`)).toEqual([
+          "billing/invoice.paid",
+          "orders/order.cancelled",
+          "orders/orders.created",
+        ]);
+        expect((await store.listConsumers(id, "orders", "orders.created"))?.map((item) => item.consumer.slug)).toEqual([
+          "billing",
+          "shipping",
+        ]);
+      });
+
+      it("rejects unknown services, contracts and versions and self-dependencies without storing anything", async () => {
+        const { id } = await ordersWithConsumers();
+        await expect(
+          store.putDependency(id, { ...SHIPPING_ON_ORDERS, consumerSlug: "warehouse" }, dependency()),
+        ).rejects.toBeInstanceOf(NotFoundError);
+        await expect(
+          store.putDependency(id, { ...SHIPPING_ON_ORDERS, providerSlug: "payments" }, dependency()),
+        ).rejects.toBeInstanceOf(NotFoundError);
+        await expect(
+          store.putDependency(id, { ...SHIPPING_ON_ORDERS, contractName: "orders.shipped" }, dependency()),
+        ).rejects.toBeInstanceOf(NotFoundError);
+        await expect(
+          store.putDependency(id, SHIPPING_ON_ORDERS, dependency({ versionSequence: 3 })),
+        ).rejects.toBeInstanceOf(UnknownVersionError);
+        await expect(
+          store.putDependency(id, { ...SHIPPING_ON_ORDERS, consumerSlug: "orders" }, dependency()),
+        ).rejects.toBeInstanceOf(SelfDependencyError);
+
+        expect(await store.listConsumers(id, "orders", "orders.created")).toEqual([]);
+        expect(await store.listDependencies(id, "warehouse")).toBeNull();
+        expect(await store.listConsumers(id, "orders", "orders.shipped")).toBeNull();
+      });
+
+      it("removes a dependency once", async () => {
+        const { id } = await ordersWithConsumers();
+        await store.putDependency(id, SHIPPING_ON_ORDERS, dependency());
+        expect(await store.removeDependency(id, SHIPPING_ON_ORDERS)).toBe(true);
+        expect(await store.removeDependency(id, SHIPPING_ON_ORDERS)).toBe(false);
+        expect(await store.removeDependency(id, { ...SHIPPING_ON_ORDERS, providerSlug: "payments" })).toBe(false);
+        expect(await store.listDependencies(id, "shipping")).toEqual([]);
+      });
+
+      it("creates one record when the same consumer registers concurrently", async () => {
+        const { id } = await ordersWithConsumers();
+        const results = await Promise.all(
+          Array.from({ length: 8 }, (_, index) =>
+            store.putDependency(id, SHIPPING_ON_ORDERS, dependency({ versionSequence: (index % 2) + 1 })),
+          ),
+        );
+        expect(results.filter((result) => result.created)).toHaveLength(1);
+        expect(await store.listConsumers(id, "orders", "orders.created")).toHaveLength(1);
+      });
+
+      it("never links or shows services across workspaces", async () => {
+        const acme = await ordersWithConsumers("acme");
+        const globex = await ordersWithConsumers("globex");
+        await store.putDependency(acme.id, SHIPPING_ON_ORDERS, dependency());
+
+        expect(await store.listConsumers(globex.id, "orders", "orders.created")).toEqual([]);
+        expect(await store.listDependencies(globex.id, "shipping")).toEqual([]);
+        expect(await store.removeDependency(globex.id, SHIPPING_ON_ORDERS)).toBe(false);
+        expect(await store.listConsumers(acme.id, "orders", "orders.created")).toHaveLength(1);
+
+        // A consumer that exists only in another workspace is unknown here.
+        const initech = await freshWorkspace("initech");
+        await store.addVersion(initech.id, "orders", "orders.created", version(ORDERS_V1));
+        await expect(store.putDependency(initech.id, SHIPPING_ON_ORDERS, dependency())).rejects.toBeInstanceOf(
+          NotFoundError,
+        );
       });
     });
 
