@@ -29,8 +29,22 @@ All `/v1` routes need `Authorization: Bearer <token>`. A token used against anot
 | GET | `…/contracts/:contract/consumers` | Registered consumers of the contract, with the version each is pinned to |
 | GET | `…/services/:service/dependencies` | Contracts the service consumes |
 | PUT, DELETE | `…/services/:service/dependencies/:provider/:contract` | Register or remove a dependency: `{ "version": 1, "uses?": ["/properties/orderId"], "note?" }` |
+| GET | `…/contracts/:contract/impact?version=` | Impact of a stored version (default: the latest) on every registered consumer |
+| POST | `…/contracts/:contract/impact` | Impact of a file that isn't imported (same body as an import); nothing is stored |
 
-Consumer lists only know what was registered, and the consumers response says so in `coverage`: an empty list does not mean nobody else reads the contract.
+Consumer lists only know what was registered, and the consumers and impact responses say so in `coverage`: an empty list does not mean nobody else reads the contract.
+
+### Change impact
+
+Each consumer is checked against the version it is pinned to: the CLI's rules compare that version with the target, and the findings that touch the consumer's `uses` decide its `status`:
+
+| Status | When |
+| --- | --- |
+| `breaking` | A BREAKING finding touches what the consumer uses |
+| `review` | An UNKNOWN finding does, or a used pointer no longer exists in the target (`missingPointers`) |
+| `safe` | Nothing the consumer uses changed incompatibly |
+
+A finding touches a used pointer when it is at that pointer, inside it, or above it (removing or retyping `/properties/customer` breaks `/properties/customer/properties/id`). Used pointers are also matched after following local `$ref`s, since findings point at the resolved schema, and requiredness changes also count as changes to the parent's `/required`. A consumer registered without `uses` relies on the whole contract. Each consumer entry lists its matching `findings` (same shape as `contractpulse diff --format json`, BREAKING first) and how many `unrelatedFindings` were left out; consumers are sorted breaking, review, safe, then by slug.
 
 Importing returns `201` with `created: true` for a new version. If the file's canonical hash equals the latest version's (whitespace or key order changes only), the latest version is returned with `200` and `created: false`. Re-importing older content after a change adds a new version, so reverts stay visible in history.
 
@@ -42,7 +56,7 @@ Errors use `{ "error": { "code", "message", "details?" } }`:
 | 401 | `UNAUTHENTICATED` | Missing, unknown or revoked token |
 | 404 | `NOT_FOUND` | Unknown or other workspace, service, contract or version |
 | 409 | `SLUG_TAKEN` | Service slug already used in the workspace |
-| 409 | `KIND_MISMATCH` | OpenAPI file for a JSON Schema contract, or the reverse |
+| 409 | `KIND_MISMATCH` | OpenAPI file for a JSON Schema contract, or the reverse (import or impact) |
 | 413 | `TOO_LARGE` | File over 1 MiB |
 | 422 | `SELF_DEPENDENCY` | A service registered as a consumer of its own contract |
 | 422 | `UNKNOWN_VERSION` | The pinned version doesn't exist |

@@ -12,7 +12,7 @@ import { describeLocation } from "./text.js";
 
 export const JSON_REPORT_VERSION = 1;
 
-const VERDICT_ORDER: readonly Verdict[] = ["BREAKING", "UNKNOWN", "SAFE"];
+export const VERDICT_ORDER: readonly Verdict[] = ["BREAKING", "UNKNOWN", "SAFE"];
 
 export type FailOn = "breaking" | "unknown" | "never";
 
@@ -81,7 +81,8 @@ function contract(loaded: LoadedContract): JsonContract {
   };
 }
 
-function finding(entry: Finding): JsonFinding {
+/** One finding as it appears in JSON output (also used by the registry's impact reports). */
+export function jsonFinding(entry: Finding): JsonFinding {
   return {
     rule: entry.rule,
     verdict: entry.verdict,
@@ -114,7 +115,7 @@ export function buildJsonReport(
     old: contract(previous),
     new: contract(next),
     summary: { total: findings.length, breaking: count("BREAKING"), unknown: count("UNKNOWN"), safe: count("SAFE") },
-    findings: ordered.map(finding),
+    findings: ordered.map(jsonFinding),
   };
 }
 

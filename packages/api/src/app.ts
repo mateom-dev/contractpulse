@@ -1,8 +1,15 @@
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import { z, ZodError } from "zod";
-import { ContractError, MAX_CONTRACT_BYTES, getAtPointer, parseContract } from "@contractpulse/cli";
-import type { Caller, DependencyKey, NewVersion } from "./domain.js";
-import { HttpError, NotFoundError, SelfDependencyError, UnknownVersionError } from "./errors.js";
+import {
+  ContractError,
+  MAX_CONTRACT_BYTES,
+  getAtPointer,
+  parseContract,
+  type LoadedContract,
+} from "@contractpulse/cli";
+import type { Caller, DependencyKey, NewVersion, VersionDetail, VersionSummary } from "./domain.js";
+import { HttpError, KindMismatchError, NotFoundError, SelfDependencyError, UnknownVersionError } from "./errors.js";
+import { computeImpact, type PinnedConsumer } from "./impact.js";
 import type { RegistryStore } from "./store.js";
 import { hashToken } from "./tokens.js";
 
@@ -51,6 +58,10 @@ const putDependencyBody = z
 const CONSUMER_COVERAGE =
   "Only consumers registered in this workspace are listed; unregistered clients of this contract are not known.";
 
+const impactQuery = z
+  .object({ version: z.coerce.number().int().min(1).max(2_147_483_647).optional() })
+  .strict();
+
 const createServiceBody = z
   .object({
     slug,
@@ -75,6 +86,25 @@ const importVersionBody = z
 
 /** JSON string escaping can grow the body well past the file size; the file limit is checked separately. */
 const BODY_LIMIT = MAX_CONTRACT_BYTES * 2 + 64 * 1024;
+
+/** Parse an uploaded contract file with the CLI's bounded parser; 413/422 when it can't be accepted. */
+function parseUpload(content: string, path: string): { parsed: LoadedContract; sizeBytes: number } {
+  const sizeBytes = Buffer.byteLength(content, "utf8");
+  if (sizeBytes > MAX_CONTRACT_BYTES) {
+    throw new HttpError(413, "TOO_LARGE", `Contract is ${sizeBytes} bytes (limit ${MAX_CONTRACT_BYTES})`);
+  }
+  try {
+    return { parsed: parseContract(path, content), sizeBytes };
+  } catch (error) {
+    if (error instanceof ContractError) {
+      throw new HttpError(422, "INVALID_CONTRACT", error.message, { reason: error.code });
+    }
+    throw error;
+  }
+}
+
+/** Stored versions were accepted by the same parser when imported. */
+const parseStored = (version: VersionDetail): LoadedContract => parseContract(version.source.path, version.content);
 
 function envelope(code: string, message: string, details?: Record<string, unknown>) {
   return { error: { code, message, ...(details ? { details } : {}) } };
@@ -162,20 +192,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
     const caller = await authorize(request, params.workspace);
     const body = importVersionBody.parse(request.body);
 
-    const sizeBytes = Buffer.byteLength(body.content, "utf8");
-    if (sizeBytes > MAX_CONTRACT_BYTES) {
-      throw new HttpError(413, "TOO_LARGE", `Contract is ${sizeBytes} bytes (limit ${MAX_CONTRACT_BYTES})`);
-    }
-
-    let parsed;
-    try {
-      parsed = parseContract(body.source.path, body.content);
-    } catch (error) {
-      if (error instanceof ContractError) {
-        throw new HttpError(422, "INVALID_CONTRACT", error.message, { reason: error.code });
-      }
-      throw error;
-    }
+    const { parsed, sizeBytes } = parseUpload(body.content, body.source.path);
 
     const input: NewVersion = {
       kind: parsed.kind,
@@ -228,7 +245,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
 
     const uses = [...new Set(body.uses ?? [])].sort();
     if (uses.length > 0) {
-      const { document } = parseContract(version.source.path, version.content);
+      const { document } = parseStored(version);
       const missing = uses.filter((pointer) => getAtPointer(document, pointer) === undefined);
       if (missing.length > 0) {
         throw new HttpError(
@@ -280,6 +297,96 @@ export function buildApp(options: AppOptions): FastifyInstance {
     const consumers = await store.listConsumers(workspace.id, params.service, params.contract);
     if (!consumers) throw new NotFoundError("Contract");
     return { consumers, coverage: CONSUMER_COVERAGE };
+  });
+
+  /**
+   * Compare `target` with the version each registered consumer is pinned to.
+   * Pinned versions are read and parsed once each, however many consumers share them.
+   */
+  async function impactOf(workspaceId: string, providerSlug: string, contractName: string, target: LoadedContract) {
+    const consumers = await store.listConsumers(workspaceId, providerSlug, contractName);
+    if (!consumers) throw new NotFoundError("Contract");
+
+    const parsed = new Map<number, LoadedContract>();
+    const pinned: PinnedConsumer[] = [];
+    for (const dependency of consumers) {
+      const sequence = dependency.version.sequence;
+      let contract = parsed.get(sequence);
+      if (!contract) {
+        const version = await store.findVersion(workspaceId, providerSlug, contractName, sequence);
+        if (!version) throw new Error(`pinned version ${sequence} of ${contractName} disappeared`);
+        contract = parseStored(version);
+        parsed.set(sequence, contract);
+      }
+      pinned.push({ dependency, pinned: contract });
+    }
+    return { ...computeImpact(target, pinned), coverage: CONSUMER_COVERAGE };
+  }
+
+  /** Impact of a stored version (default: the latest) on every registered consumer. */
+  app.get("/v1/workspaces/:workspace/services/:service/contracts/:contract/impact", async (request) => {
+    const params = contractParams.parse(request.params);
+    const query = impactQuery.parse(request.query);
+    const { workspace } = await authorize(request, params.workspace);
+
+    const versions = await store.listVersions(workspace.id, params.service, params.contract);
+    if (!versions) throw new NotFoundError("Contract");
+    const sequence = query.version ?? versions[0]?.sequence;
+    const version =
+      sequence === undefined ? null : await store.findVersion(workspace.id, params.service, params.contract, sequence);
+    if (!version) throw new NotFoundError("Contract version");
+
+    const target = parseStored(version);
+    // The file itself is available from the version endpoint; the report only names it.
+    const summary: VersionSummary = {
+      sequence: version.sequence,
+      kind: version.kind,
+      declaredVersion: version.declaredVersion,
+      specVersion: version.specVersion,
+      hash: version.hash,
+      sizeBytes: version.sizeBytes,
+      source: version.source,
+      importedBy: version.importedBy,
+      importedAt: version.importedAt,
+    };
+    return {
+      target: { stored: true, version: summary },
+      ...(await impactOf(workspace.id, params.service, params.contract, target)),
+    };
+  });
+
+  /**
+   * Impact of a contract file that hasn't been imported, e.g. the file on a
+   * pull request branch. Nothing is stored.
+   */
+  app.post("/v1/workspaces/:workspace/services/:service/contracts/:contract/impact", async (request) => {
+    const params = contractParams.parse(request.params);
+    const { workspace } = await authorize(request, params.workspace);
+    const body = importVersionBody.parse(request.body);
+    const { parsed, sizeBytes } = parseUpload(body.content, body.source.path);
+
+    const versions = await store.listVersions(workspace.id, params.service, params.contract);
+    if (!versions) throw new NotFoundError("Contract");
+    const kind = versions[0]?.kind;
+    if (kind !== undefined && kind !== parsed.kind) throw new KindMismatchError(params.contract, kind, parsed.kind);
+
+    const latest = versions[0];
+    return {
+      target: {
+        stored: false,
+        candidate: {
+          kind: parsed.kind,
+          declaredVersion: parsed.contractVersion ?? null,
+          specVersion: parsed.specVersion,
+          hash: parsed.hash,
+          sizeBytes,
+          source: { path: body.source.path, repository: body.source.repository ?? null, ref: body.source.ref ?? null },
+          // Sequence of the latest stored version when it has the same canonical content.
+          matchesLatest: latest !== undefined && latest.hash === parsed.hash ? latest.sequence : null,
+        },
+      },
+      ...(await impactOf(workspace.id, params.service, params.contract, parsed)),
+    };
   });
 
   return app;
